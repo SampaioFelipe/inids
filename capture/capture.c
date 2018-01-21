@@ -1,46 +1,67 @@
 #include "capture.h"
+#include "../utils/error_handler.h"
 
 #include <memory.h>
 #include <stdlib.h>
 
 
-void capture_init() {
-
-    pcap_if_t *devices = NULL; // list of all network devices
-
+void capture_init(int mode, char *filename)
+{
     uint32_t src_ip, netmask;
 
     memset(errbuf, 0, PCAP_ERRBUF_SIZE);
 
-    // find all the netowork devices and return in devices
-    if (pcap_findalldevs(&devices, errbuf) < 0) {
-        fprintf(stderr, "%s", errbuf);
-        exit(EXIT_FAILURE);
+    if (mode == ONLINE_MODE)
+    {
+
+        pcap_if_t *devices = NULL; // list of all network devices
+
+
+        // find all the network devices and return in devices
+        if (pcap_findalldevs(&devices, errbuf) < 0)
+        {
+            print_error(errbuf);
+            exit(EXIT_FAILURE);
+        }
+
+        if (devices == NULL)
+        {
+            print_error(DEVICE_NOT_FOUND);
+            exit(EXIT_FAILURE);
+        }
+
+        // Open the device had been chosen
+        capture_device = pcap_open_live(devices->name, 65555, 1, 512, errbuf); //TODO: estudar melhor os parametros
+
+        if (capture_device == NULL)
+        {
+            print_error(errbuf);
+            exit(EXIT_FAILURE);
+        }
+
+        // Get network device source IP address and netmask.
+        if (pcap_lookupnet(devices->name, &src_ip, &netmask, errbuf) < 0)
+        {
+            printf("pcap_lookupnet: %s\n", errbuf);
+            exit(EXIT_FAILURE);
+        }
+
+        struct in_addr ip_addr;
+        ip_addr.s_addr = src_ip;
+        printf("The IP address is %s\n", inet_ntoa(ip_addr));
+    }
+    else
+    {
+        capture_device = pcap_open_offline(filename, errbuf);
+
+        if (capture_device == NULL)
+        {
+            print_error(errbuf);
+            exit(EXIT_FAILURE);
+        }
+
     }
 
-    if (devices == NULL) {
-        fprintf(stderr, "no network device found");
-        exit(EXIT_FAILURE);
-    }
-
-    // Open the device had been chosen
-    //TODO: possibilitar que a análise possa ser feita de um arquivo ao invés da captura online: pcap_open_offline()
-    capture_device = pcap_open_live(devices->name, 65555, 1, 512, errbuf); //TODO: estudar melhor os parametros
-
-    if (capture_device == NULL) {
-        fprintf(stderr, "%s",errbuf);
-        exit(EXIT_FAILURE);
-    }
-
-    // Get network device source IP address and netmask.
-    if (pcap_lookupnet(devices->name, &src_ip, &netmask, errbuf) < 0) {
-        printf("pcap_lookupnet: %s\n", errbuf);
-        exit(EXIT_FAILURE);
-    }
-
-    struct in_addr ip_addr;
-    ip_addr.s_addr = src_ip;
-    printf("The IP address is %s\n", inet_ntoa(ip_addr));
 
 //TODO: Tratar a especificação de expressões de filtro
 
@@ -60,7 +81,8 @@ void capture_init() {
 //    }
 }
 
-void capture_start_loop() {
+void capture_start_loop()
+{
     int count = 0;
 
     int data_link_type;
@@ -68,7 +90,8 @@ void capture_start_loop() {
     // Determine the datalink layer type.
     data_link_type = pcap_datalink(capture_device);
 
-    switch (data_link_type) {
+    switch (data_link_type)
+    {
         case DLT_NULL: // LOOPBACK
             link_hdr_len = 4;
             break;
@@ -83,15 +106,17 @@ void capture_start_loop() {
     }
 
     //TODO: ajustar os parametros
-    if (pcap_loop(capture_device, 20, process_packet, (u_char *) &count) == -1) {
+    if (pcap_loop(capture_device, 20, process_packet, (u_char *) &count) == -1)
+    {
         fprintf(stderr, "%s", errbuf);
         exit(EXIT_FAILURE);
     }
 }
 
-void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet_bytes) {
+void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet_bytes)
+{
     int *counter = (int *) args;
-    printf("Count: %d\n",*counter);
+    printf("Count: %d\n", *counter);
     *counter += 1;
 
     struct ip *iphdr;
@@ -114,7 +139,8 @@ void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char
     // the fields based on the type of hearder: tcp, udp or icmp.
     packet_bytes += 4 * iphdr->ip_hl;
 
-    switch (iphdr->ip_p) {
+    switch (iphdr->ip_p)
+    {
         case IPPROTO_TCP:
             tcphdr = (struct tcphdr *) packet_bytes;
             printf("TCP  %s:%d -> %s:%d\n", srcip, ntohs(tcphdr->source),

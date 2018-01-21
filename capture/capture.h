@@ -22,7 +22,7 @@ pcap_t* capture_device; // packet capture device
 int link_hdr_len; // data link header lenght
 
 /* Initialize capture */
-void capture_init();
+void capture_init(int mode, char* filename);
 
 void capture_start_loop();
 
