@@ -5,7 +5,7 @@
 #define print_error(str) fprintf(stderr,"%s\n", str);
 
 /* Error messages */
-#define USAGE_MSG "Usage: inids [-f] [file...]"
+#define USAGE_MSG "Usage: inids [-f file...] [-e \"filter expression\"]"
 
 #define DEVICE_NOT_FOUND "no network device found"
 

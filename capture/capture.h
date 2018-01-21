@@ -5,24 +5,21 @@
 #include "params.h"
 
 
-
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <netinet/ether.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 
 
-
 char errbuf[PCAP_ERRBUF_SIZE]; // buffer for error handling
 
-pcap_t* capture_device; // packet capture device
-
-int link_hdr_len; // data link header lenght
+pcap_t *capture_device; // packet capture device
 
 /* Initialize capture */
-void capture_init(int mode, char* filename);
+void capture_init(int mode, char *filename, char *filter_expression);
 
 void capture_start_loop();
 

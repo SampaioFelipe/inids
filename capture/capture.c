@@ -5,9 +5,11 @@
 #include <stdlib.h>
 
 
-void capture_init(int mode, char *filename)
+void capture_init(int mode, char *filename, char *filter_expression)
 {
+    struct bpf_program bpf; // compiled filter expression
     uint32_t src_ip, netmask;
+
 
     memset(errbuf, 0, PCAP_ERRBUF_SIZE);
 
@@ -39,10 +41,10 @@ void capture_init(int mode, char *filename)
             exit(EXIT_FAILURE);
         }
 
-        // Get network device source IP address and netmask.
+        // Get network device source IP address and netmask for the filtering.
         if (pcap_lookupnet(devices->name, &src_ip, &netmask, errbuf) < 0)
         {
-            printf("pcap_lookupnet: %s\n", errbuf);
+            print_error(errbuf);
             exit(EXIT_FAILURE);
         }
 
@@ -60,25 +62,28 @@ void capture_init(int mode, char *filename)
             exit(EXIT_FAILURE);
         }
 
+        netmask = 0;
     }
 
 
-//TODO: Tratar a especificação de expressões de filtro
+    //TODO: Tratar a especificação de expressões de filtro
 
-//    // Convert the packet filter expression into a packet
-//    // filter binary.
-//    if (pcap_compile(pd, &bpf, (char*)bpfstr, 0, netmask))
-//    {
-//        printf("pcap_compile(): %s\n", pcap_geterr(pd));
-//        return NULL;
-//    }
-//
-//    // Assign the packet filter to the given libpcap socket.
-//    if (pcap_setfilter(pd, &bpf) < 0)
-//    {
-//        printf("pcap_setfilter(): %s\n", pcap_geterr(pd));
-//        return NULL;
-//    }
+    if (filter_expression != NULL)
+    {
+        if (pcap_compile(capture_device, &bpf, filter_expression, 1, netmask) == -1)
+        {
+            print_error(errbuf);
+            return;
+        }
+
+        // Assign the packet filter to the given libpcap socket.
+        if (pcap_setfilter(capture_device, &bpf) == -1)
+        {
+            print_error(errbuf);
+            return;
+        }
+    }
+
 }
 
 void capture_start_loop()
@@ -90,92 +95,120 @@ void capture_start_loop()
     // Determine the datalink layer type.
     data_link_type = pcap_datalink(capture_device);
 
+    // TODO: dar suporte a outros tipos de link e
     switch (data_link_type)
     {
         case DLT_NULL: // LOOPBACK
-            link_hdr_len = 4;
             break;
 
         case DLT_EN10MB: // ETHERNET
-            link_hdr_len = 14;
             break;
-            //TODO: dar suporte a outros tipos de link
+
         default:
             fprintf(stderr, "Unsupported datalink (%d)\n", data_link_type);
             return;
     }
 
-    //TODO: ajustar os parametros
-    if (pcap_loop(capture_device, 20, process_packet, (u_char *) &count) == -1)
+    // TODO: ajustar os parametros
+    if (pcap_loop(capture_device, -1, process_packet, (u_char *) &count) == -1)
     {
-        fprintf(stderr, "%s", errbuf);
+        print_error(errbuf);
         exit(EXIT_FAILURE);
     }
 }
 
 void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet_bytes)
 {
+    // passed argument
     int *counter = (int *) args;
+
     printf("Count: %d\n", *counter);
     *counter += 1;
 
-    struct ip *iphdr;
-    struct icmphdr *icmphdr;
-    struct tcphdr *tcphdr;
-    struct udphdr *udphdr;
-    char iphdrInfo[256], srcip[256], dstip[256];
-    unsigned short id, seq;
+    // headers tipes
+    const struct ether_header *etherhdr;
+    const struct ip *iphdr;
+    const struct tcphdr *tcphdr;
+    const struct icmphdr *icmphdr;
+    const struct udphdr *udphdr;
 
-    // Skip the datalink layer header and get the IP header fields.
-    packet_bytes += link_hdr_len;
-    iphdr = (struct ip *) packet_bytes;
-    strcpy(srcip, inet_ntoa(iphdr->ip_src));
-    strcpy(dstip, inet_ntoa(iphdr->ip_dst));
-    sprintf(iphdrInfo, "ID:%d TOS:0x%x, TTL:%d IpLen:%d DgLen:%d",
-            ntohs(iphdr->ip_id), iphdr->ip_tos, iphdr->ip_ttl,
-            4 * iphdr->ip_hl, ntohs(iphdr->ip_len));
+    int hdr_off = 0;
 
-    // Advance to the transport layer header then parse and display
-    // the fields based on the type of hearder: tcp, udp or icmp.
-    packet_bytes += 4 * iphdr->ip_hl;
+    char iphdrInfo[256], srcip[INET_ADDRSTRLEN], dstip[INET_ADDRSTRLEN];
 
-    switch (iphdr->ip_p)
+    /*
+     * Ethernet II frame:
+     * --------------------------------------------------------------------
+     * |[ MAC ADDR DST | MAC ADDR SRC | ETHER TYPE ] | PAYLOAD | CHECKSUM |
+     * --------------------------------------------------------------------
+     */
+
+    etherhdr = (struct ether_header *) packet_bytes;
+
+    /*
+     * ntohs is used to convert ip addr from network byte order to host byte order
+     * Remember, x86 like architecture is little endian, whereas network is big endian
+     */
+    if (ntohs(etherhdr->ether_type) == ETHERTYPE_IP)
     {
-        case IPPROTO_TCP:
-            tcphdr = (struct tcphdr *) packet_bytes;
-            printf("TCP  %s:%d -> %s:%d\n", srcip, ntohs(tcphdr->source),
-                   dstip, ntohs(tcphdr->dest));
-            printf("%s\n", iphdrInfo);
-            printf("%c%c%c%c%c%c Seq: 0x%x Ack: 0x%x Win: 0x%x TcpLen: %d\n",
-                   (tcphdr->urg ? 'U' : '*'),
-                   (tcphdr->ack ? 'A' : '*'),
-                   (tcphdr->psh ? 'P' : '*'),
-                   (tcphdr->rst ? 'R' : '*'),
-                   (tcphdr->syn ? 'S' : '*'),
-                   (tcphdr->fin ? 'F' : '*'),
-                   ntohl(tcphdr->seq), ntohl(tcphdr->ack_seq),
-                   ntohs(tcphdr->window), 4 * tcphdr->doff);
-            break;
+        hdr_off += sizeof(struct ether_header);
+        iphdr = (struct ip *) (packet_bytes + hdr_off);
 
-        case IPPROTO_UDP:
-            udphdr = (struct udphdr *) packet_bytes;
-            printf("UDP  %s:%d -> %s:%d\n", srcip, ntohs(udphdr->source),
-                   dstip, ntohs(udphdr->dest));
-            printf("%s\n", iphdrInfo);
-            break;
+        // TODO: remover essa parte, pois é apenas para debug
+        // inet_ntop converts de ip adress bytes to a human-readable string (inet_ntoa is deprecated)
+        inet_ntop(AF_INET, &(iphdr->ip_src), srcip, INET_ADDRSTRLEN);
+        inet_ntop(AF_INET, &(iphdr->ip_dst), dstip, INET_ADDRSTRLEN);
 
-        case IPPROTO_ICMP:
-            icmphdr = (struct icmphdr *) packet_bytes;
-            printf("ICMP %s -> %s\n", srcip, dstip);
-            printf("%s\n", iphdrInfo);
-            memcpy(&id, (u_char *) icmphdr + 4, 2);
-            memcpy(&seq, (u_char *) icmphdr + 6, 2);
-            printf("Type:%d Code:%d ID:%d Seq:%d\n", icmphdr->type, icmphdr->code,
-                   ntohs(id), ntohs(seq));
-            break;
+        // TODO: remover essa parte, pois é apenas para debug
+        sprintf(iphdrInfo, "VERSION:%d | HL:%d | TOS:0x%x | TOTAL LENGHT:%d |\n"
+                        "ID:%d | TTL:%d | PROTOCOL:0x%x |\n"
+                        "SRC:%s |\n"
+                        "DST:%s |\n",
+                iphdr->ip_v, 4 * iphdr->ip_hl, iphdr->ip_tos, ntohs(iphdr->ip_len),
+                ntohs(iphdr->ip_id), iphdr->ip_ttl, iphdr->ip_p, srcip, dstip);
 
-        default:
-            printf("Not supported\n");
+        switch (iphdr->ip_p)
+        {
+            case IPPROTO_TCP:
+                hdr_off += sizeof(struct ip);
+                tcphdr = (struct tcphdr *) (packet_bytes + hdr_off);
+
+                printf("TCP  %s:%d -> %s:%d\n", srcip, ntohs(tcphdr->source),
+                       dstip, ntohs(tcphdr->dest));
+                printf("%s\n", iphdrInfo);
+
+                printf("%c%c%c%c%c%c Seq: 0x%x Ack: 0x%x Win: 0x%x TcpLen: %d\n",
+                       (tcphdr->urg ? 'U' : '*'),
+                       (tcphdr->ack ? 'A' : '*'),
+                       (tcphdr->psh ? 'P' : '*'),
+                       (tcphdr->rst ? 'R' : '*'),
+                       (tcphdr->syn ? 'S' : '*'),
+                       (tcphdr->fin ? 'F' : '*'),
+                       ntohl(tcphdr->seq), ntohl(tcphdr->ack_seq),
+                       ntohs(tcphdr->window), 4 * tcphdr->doff);
+                break;
+
+            case IPPROTO_UDP:
+                udphdr = (struct udphdr *) packet_bytes;
+                printf("UDP  %s:%d -> %s:%d\n", srcip, ntohs(udphdr->source),
+                       dstip, ntohs(udphdr->dest));
+                printf("%s\n", iphdrInfo);
+                break;
+
+//            case IPPROTO_ICMP:
+//                icmphdr = (struct icmphdr *) packet_bytes;
+//                printf("ICMP %s -> %s\n", srcip, dstip);
+//                printf("%s\n", iphdrInfo);
+//                memcpy(&id, (u_char *) icmphdr + 4, 2);
+//                memcpy(&seq, (u_char *) icmphdr + 6, 2);
+//                printf("Type:%d Code:%d ID:%d Seq:%d\n", icmphdr->type, icmphdr->code,
+//                       ntohs(id), ntohs(seq));
+//                break;
+
+            default:
+                printf("Not supported\n");
+        }
+
     }
 
     printf("------------------------------------------------------\n\n");
