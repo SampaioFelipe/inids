@@ -2,7 +2,6 @@
 #define INIDS_CAPTURE_H
 
 #include <pcap.h>
-#include "params.h"
 
 
 #include <netinet/in.h>
@@ -13,6 +12,8 @@
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 
+#define ONLINE_MODE 0
+#define OFFLINE_MODE 1
 
 char errbuf[PCAP_ERRBUF_SIZE]; // buffer for error handling
 
