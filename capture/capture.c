@@ -1,5 +1,4 @@
 #include "capture.h"
-#include "../utils/error_handler.h"
 
 #include <memory.h>
 #include <stdlib.h>
@@ -32,7 +31,7 @@ void capture_init(int mode, char *filename, char *filter_expression)
             exit(EXIT_FAILURE);
         }
 
-        // Open the device had been chosen
+        // Open the chosen device
         capture_device = pcap_open_live(devices->name, 65555, 1, 512, errbuf); //TODO: estudar melhor os parametros
 
         if (capture_device == NULL)
@@ -119,20 +118,38 @@ void capture_start_loop()
 
 void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char *packet_bytes)
 {
+    /* Verify the buffers status */
+    if(cap_buf->count == BUFFER_SIZE - 1){
+
+        printf("\nverificando-------------------------------\n");
+
+        if(pthread_mutex_trylock(&mutex_processing) != 0){
+            return;
+        }
+        antigen_buffer *aux = proc_buf;
+        proc_buf = cap_buf;
+        cap_buf = aux;
+
+        pthread_cond_broadcast(&cond_processing);
+
+        pthread_mutex_unlock(&mutex_processing);
+    }
+
+
     // passed argument
     int *counter = (int *) args;
 
-    printf("Count: %d\n", *counter);
+    printf("Count: %d\n", cap_buf->count);
     *counter += 1;
 
-    // headers tipes
-    const struct ether_header *etherhdr;
+    // header types
+    const struct ether_header *etherhdr; // Ethernet
     const struct ip *iphdr;
     const struct tcphdr *tcphdr;
-    const struct icmphdr *icmphdr;
     const struct udphdr *udphdr;
 
-    int hdr_off = 0;
+    int hdr_off = 0; // header offset, points to the header first bit
+
 
     char iphdrInfo[256], srcip[INET_ADDRSTRLEN], dstip[INET_ADDRSTRLEN];
 
@@ -151,8 +168,12 @@ void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char
      */
     if (ntohs(etherhdr->ether_type) == ETHERTYPE_IP)
     {
+        /* Points to the next hearder, which is the ip header */
         hdr_off += sizeof(struct ether_header);
         iphdr = (struct ip *) (packet_bytes + hdr_off);
+
+        // TODO: verificar a eficiencia do memcpy
+//        memcpy(cap_buf->antigens[cap_buf->count].ip_src, &iphdr->ip_src, sizeof(struct in_addr));
 
         // TODO: remover essa parte, pois é apenas para debug
         // inet_ntop converts de ip adress bytes to a human-readable string (inet_ntoa is deprecated)
@@ -171,6 +192,7 @@ void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char
         {
             case IPPROTO_TCP:
                 hdr_off += sizeof(struct ip);
+
                 tcphdr = (struct tcphdr *) (packet_bytes + hdr_off);
 
                 printf("TCP  %s:%d -> %s:%d\n", srcip, ntohs(tcphdr->source),
@@ -195,20 +217,12 @@ void process_packet(u_char *args, const struct pcap_pkthdr *pkthdr, const u_char
                 printf("%s\n", iphdrInfo);
                 break;
 
-//            case IPPROTO_ICMP:
-//                icmphdr = (struct icmphdr *) packet_bytes;
-//                printf("ICMP %s -> %s\n", srcip, dstip);
-//                printf("%s\n", iphdrInfo);
-//                memcpy(&id, (u_char *) icmphdr + 4, 2);
-//                memcpy(&seq, (u_char *) icmphdr + 6, 2);
-//                printf("Type:%d Code:%d ID:%d Seq:%d\n", icmphdr->type, icmphdr->code,
-//                       ntohs(id), ntohs(seq));
-//                break;
-
             default:
                 printf("Not supported\n");
         }
 
+        //TODO: verificar quando o pacote não é suportado/inválido
+        cap_buf->count++;
     }
 
     printf("------------------------------------------------------\n\n");
